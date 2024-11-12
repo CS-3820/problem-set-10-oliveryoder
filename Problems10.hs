@@ -108,7 +108,11 @@ subst x m (Var y)
   | otherwise = Var y
 subst x m (Lam y n) = Lam y (substUnder x m y n)
 subst x m (App n1 n2) = App (subst x m n1) (subst x m n2)
-subst x m n = undefined
+--CHANGE
+subst x m (Store n) = Store (subst x m n)         
+subst _ _ Recall = Recall                         
+subst x m (Throw n) = Throw (subst x m n)         
+subst x m (Catch n y n') = Catch (subst x m n) y (substUnder x m y n') -- Catch case
 
 {-------------------------------------------------------------------------------
 
@@ -200,9 +204,61 @@ Lecture 12.  But be sure to handle *all* the cases where exceptions need to
 bubble; this won't *just* be `Throw` and `Catch.
 
 -------------------------------------------------------------------------------}
-
 smallStep :: (Expr, Expr) -> Maybe (Expr, Expr)
-smallStep = undefined
+smallStep (Const v, acc) = Nothing  -- Constants are fully evaluated
+smallStep (Plus (Const v1) (Const v2), acc) = Just (Const (v1 + v2), acc)  -- Perform addition
+--Errors not decrementing
+smallStep (Plus m n, acc)
+  | not (isValue m) = do
+      (m', acc') <- smallStep (m, acc)
+      return (Plus m' n, acc')
+  | not (isValue n) = do
+      (n', acc') <- smallStep (n, acc)
+      return (Plus m n', acc)
+  | otherwise = Nothing  -- Both are values, no more steps
+smallStep (Var x, acc) = Nothing  -- Variables alone do not step
+-- Application: function application and argument evaluation
+-- Errors now decrementing
+smallStep (App (Lam x body) arg, acc)
+  | isValue arg = Just (subst x arg body, acc)  -- Substitute argument if it’s a value
+  | otherwise = do
+      (arg', acc') <- smallStep (arg, acc)
+      return (App (Lam x body) arg', acc')
+--Failure with 6:1-3 after added (last one then this one)
+--Updated function makes no changes
+smallStep (App f a, acc)
+  | isValue f && isValue a = case f of
+      Lam x body -> Just (subst x a body, acc)  
+      _ -> Nothing  
+  | not (isValue f) = do
+      (f', acc') <- smallStep (f, acc)
+      return (App f' a, acc')
+  | otherwise = do
+      (a', acc') <- smallStep (a, acc)
+      return (App f a', acc')
+smallStep (Store m, acc)
+  | isValue m = Just (Const 0, m)
+  | otherwise = do
+      (m', acc') <- smallStep (m, acc)
+      return (Store m', acc')
+--more failures (7:1-3)
+smallStep (Recall, acc) = Just (acc, acc)
+
+-- Exception Handling 
+-- CAUSED STACKOVERFLOW
+smallStep (Throw m, acc)
+  | isValue m = Nothing
+  | otherwise = do
+     (m', acc') <- smallStep (m, acc)
+     return (Throw m', acc') 
+smallStep (Catch m y n, acc)
+  | isValue m = Just (m, acc)  
+  | otherwise = case m of
+      Throw w -> Just (subst y w n, acc)  
+      _ -> do
+          (m', acc') <- smallStep (m, acc)
+          return (Catch m' y n, acc')
+
 
 steps :: (Expr, Expr) -> [(Expr, Expr)]
 steps s = case smallStep s of
