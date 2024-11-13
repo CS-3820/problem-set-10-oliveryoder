@@ -205,60 +205,53 @@ bubble; this won't *just* be `Throw` and `Catch.
 
 -------------------------------------------------------------------------------}
 smallStep :: (Expr, Expr) -> Maybe (Expr, Expr)
-smallStep (Const v, acc) = Nothing  -- Constants are fully evaluated
-smallStep (Plus (Const v1) (Const v2), acc) = Just (Const (v1 + v2), acc)  -- Perform addition
---Errors not decrementing
+smallStep (Const _, acc) = Nothing  -- Constants are values, so they don't step
+
 smallStep (Plus m n, acc)
-  | not (isValue m) = do
-      (m', acc') <- smallStep (m, acc)
-      return (Plus m' n, acc')
-  | not (isValue n) = do
-      (n', acc') <- smallStep (n, acc)
-      return (Plus m n', acc)
-  | otherwise = Nothing  -- Both are values, no more steps
-smallStep (Var x, acc) = Nothing  -- Variables alone do not step
--- Application: function application and argument evaluation
--- Errors now decrementing
-smallStep (App (Lam x body) arg, acc)
-  | isValue arg = Just (subst x arg body, acc)  -- Substitute argument if it’s a value
-  | otherwise = do
-      (arg', acc') <- smallStep (arg, acc)
-      return (App (Lam x body) arg', acc')
---Failure with 6:1-3 after added (last one then this one)
---Updated function makes no changes
-smallStep (App f a, acc)
-  | isValue f && isValue a = case f of
-      Lam x body -> Just (subst x a body, acc)  
-      _ -> Nothing  
-  | not (isValue f) = do
-      (f', acc') <- smallStep (f, acc)
-      return (App f' a, acc')
-  | otherwise = do
-      (a', acc') <- smallStep (a, acc)
-      return (App f a', acc')
+  | not (isValue m) = case smallStep (m, acc) of
+      Just (m', acc') -> Just (Plus m' n, acc')
+      Nothing -> Nothing
+  | not (isValue n) = case smallStep (n, acc) of
+      Just (n', acc') -> Just (Plus m n', acc')
+      Nothing -> Nothing
+  | otherwise = case (m, n) of
+      (Const v1, Const v2) -> Just (Const (v1 + v2), acc)
+      _ -> Nothing
+
+smallStep (App m n, acc)
+  | not (isValue m) = case smallStep (m, acc) of
+      Just (m', acc') -> Just (App m' n, acc')
+      Nothing -> Nothing
+  | not (isValue n) = case smallStep (n, acc) of
+      Just (n', acc') -> Just (App m n', acc')
+      Nothing -> Nothing
+  | otherwise = case m of
+      Lam x body -> Just (subst x n body, acc)
+      _ -> Nothing
+
 smallStep (Store m, acc)
   | isValue m = Just (Const 0, m)
-  | otherwise = do
-      (m', acc') <- smallStep (m, acc)
-      return (Store m', acc')
---more failures (7:1-3)
+  | otherwise = case smallStep (m, acc) of
+      Just (m', acc') -> Just (Store m', acc')
+      Nothing -> Nothing
+
 smallStep (Recall, acc) = Just (acc, acc)
 
--- Exception Handling 
--- CAUSED STACKOVERFLOW
 smallStep (Throw m, acc)
-  | isValue m = Nothing
-  | otherwise = do
-     (m', acc') <- smallStep (m, acc)
-     return (Throw m', acc') 
-smallStep (Catch m y n, acc)
-  | isValue m = Just (m, acc)  
-  | otherwise = case m of
-      Throw w -> Just (subst y w n, acc)  
-      _ -> do
-          (m', acc') <- smallStep (m, acc)
-          return (Catch m' y n, acc')
+  | isValue m = Nothing  -- A throw with a value is "stuck"
+  | otherwise = case smallStep (m, acc) of
+      Just (m', acc') -> Just (Throw m', acc')
+      Nothing -> Nothing
 
+smallStep (Catch m y n, acc)
+  | isValue m = Just (m, acc)  -- If m is a value, return it
+  | otherwise = case m of
+      Throw v | isValue v -> Just (subst y v n, acc)  -- Handle thrown value
+      _ -> case smallStep (m, acc) of
+        Just (m', acc') -> Just (Catch m' y n, acc')
+        Nothing -> Nothing
+
+smallStep _ = Nothing
 
 steps :: (Expr, Expr) -> [(Expr, Expr)]
 steps s = case smallStep s of
